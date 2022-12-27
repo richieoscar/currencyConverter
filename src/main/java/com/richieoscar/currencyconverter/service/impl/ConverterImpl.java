@@ -5,7 +5,6 @@ import com.richieoscar.currencyconverter.dto.ConvertRequest;
 import com.richieoscar.currencyconverter.dto.ConverterResponse;
 import com.richieoscar.currencyconverter.dto.CsvReportDto;
 import com.richieoscar.currencyconverter.dto.DefaultApiResponse;
-import com.richieoscar.currencyconverter.dto.enums.CurrencyCode;
 import com.richieoscar.currencyconverter.exception.CurrencyConverterException;
 import com.richieoscar.currencyconverter.service.Converter;
 import com.richieoscar.currencyconverter.service.FileReportService;
@@ -15,12 +14,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
-import static com.richieoscar.currencyconverter.dto.Constant.*;
 import static java.util.stream.Collectors.toList;
 
 @Slf4j
@@ -36,6 +31,7 @@ public class ConverterImpl implements Converter {
     @Override
     public void convert(ConvertRequest request, HttpServletResponse response) {
         //GET CURRENCY RATES FORM API
+        Map<String, ArrayList<ConverterResponse>> dataSet = new HashMap<>();
         ConverterResponse[] currencies = converterHttpService.getCurrencies();
         if (currencies == null) {
             throw new CurrencyConverterException("Could not Fetch Conversion pair");
@@ -46,11 +42,16 @@ public class ConverterImpl implements Converter {
                         converterResponse.getFromCurrencyCode().equals(request.getFromCurrencyCode())
                                 && converterResponse.getToCurrencyCode().equals(request.getToCurrencyCode())
                 ).toList();
-        if (conversionPair.isEmpty()) {
-            throw new CurrencyConverterException("Unable to Convert Currency Pair");
-        }
+        List<ConverterResponse> pairMatchingRequestToCurrencyCode = Arrays.stream(currencies)
+                .filter(converterResponse -> request.getToCurrencyCode().equals(converterResponse.getToCurrencyCode())).collect(toList());
+
+
+        dataSet.put("matchingPair", new ArrayList<>(conversionPair));
+        dataSet.put("toCurrencyCodePair", new ArrayList<>(pairMatchingRequestToCurrencyCode));
+        dataSet.put("currency", new ArrayList<>(Arrays.asList(currencies)));
+
         //DO THE CONVERSION
-        List<ConverterResponse> convertedCurrency = doConversion(conversionPair.get(0), request.getAmount());
+        List<ConverterResponse> convertedCurrency = doConversion(dataSet, request.getAmount(), request);
         List<CsvReportDto> conversionFileList = convertedCurrency.stream().map(converterResponse -> CsvReportDto.builder().
                 amount(converterResponse.getConvertedAmount())
                 .currencyCode(converterResponse.getToCurrencyCode())
@@ -58,6 +59,64 @@ public class ConverterImpl implements Converter {
                 .path(converterResponse.getPath())
                 .build()).collect(toList());
         fileReportService.exportCSV(conversionFileList, response);
+    }
+
+    private List<ConverterResponse> doConversion(Map<String, ArrayList<ConverterResponse>> data, BigDecimal amount, ConvertRequest request) {
+        ArrayList<ConverterResponse> matchingPair = data.get("matchingPair");
+        ArrayList<ConverterResponse> toCurrencyCodePair = data.get("toCurrencyCodePair");
+        ArrayList<ConverterResponse> currency = data.get("currency");
+        if (!matchingPair.isEmpty()) {
+            ConverterResponse pair = matchingPair.get(0);
+            BigDecimal exchangeRate = BigDecimal.valueOf(Double.parseDouble(pair.getExchangeRate()));
+            BigDecimal convertedAmount = amount.multiply(exchangeRate);
+            pair.setConvertedAmount(convertedAmount);
+            pair.setPath(String.format("%s | %s", pair.getFromCurrencyCode(), pair.getToCurrencyCode()));
+            getCountry(pair);
+            return matchingPair;
+        } else if (!toCurrencyCodePair.isEmpty()) {
+            log.info("ToCurrencyPair {}", toCurrencyCodePair);
+            Set<ConverterResponse> cadSet = new HashSet<>();
+            for (ConverterResponse res : currency) {
+                for (ConverterResponse toPair : toCurrencyCodePair) {
+                    if (res.getFromCurrencyCode().equals("CAD") && res.getToCurrencyCode()
+                            .equals(toPair.getFromCurrencyCode())) {
+                        cadSet.add(res);
+                    }
+                }
+            }
+            if (cadSet.isEmpty()) throw new CurrencyConverterException("No Conversion Available");
+
+            log.info("CadSet {}", cadSet);
+            Optional<ConverterResponse> maxValue = cadSet.stream().map(converterResponse -> {
+                converterResponse.setConvertedAmount(amount.multiply(BigDecimal.valueOf(Double.parseDouble(converterResponse.getExchangeRate()))));
+                return converterResponse;
+            }).max(Comparator.comparing(ConverterResponse::getConvertedAmount));
+
+            //Max is the highest value from conversion of CAD to Other currencies
+            if (maxValue.isPresent()) {
+                ConverterResponse bestRatePair = maxValue.get();
+                log.info("Best rate pair {}", bestRatePair);
+                return toCurrencyCodePair.stream().filter(converterResponse -> converterResponse.getFromCurrencyCode().equals(bestRatePair.getToCurrencyCode()))
+                        .map(converterResponse -> {
+                            converterResponse.setConvertedAmount(amount.multiply(BigDecimal.valueOf(Double.parseDouble(converterResponse.getExchangeRate()))));
+                            converterResponse.setPath(String.format("%s | %s | %s", bestRatePair.getFromCurrencyCode(), bestRatePair.getToCurrencyCode(), converterResponse.getToCurrencyCode()));
+                            return getCountry(converterResponse);
+                        }).collect(toList());
+            }
+
+        } else return Collections.emptyList();
+
+        return Collections.emptyList();
+    }
+
+    private ConverterResponse getCountry(ConverterResponse converterResponse) {
+        String[] s = converterResponse.getFromCurrencyName().split(" ");
+        if (s.length == 1) {
+            converterResponse.setCountry(s[0]);
+        } else {
+            converterResponse.setCountry(s[0]);
+        }
+        return converterResponse;
     }
 
     @Override
@@ -80,72 +139,4 @@ public class ConverterImpl implements Converter {
         return defaultApiResponse;
     }
 
-
-    private List<ConverterResponse> doConversion(ConverterResponse currency, BigDecimal amount) {
-        List<ConverterResponse> response = new ArrayList<>();
-        CurrencyCode currencyCode = CurrencyCode.valueOf(currency.getToCurrencyCode());
-        switch (currencyCode) {
-            case HKD -> {
-                log.info("Converting from {} to {}", currency.getFromCurrencyCode(), currency.getToCurrencyCode());
-                //using GPB as unitary currency for Best rate
-                //1CAD = 0.61GBP
-                BigDecimal cadToGbp = amount.multiply(BigDecimal.valueOf(GBP_RATE));
-                BigDecimal gbpToHkd = cadToGbp.multiply(BigDecimal.valueOf(GBP_HKD_RATE));
-                currency.setConvertedAmount(gbpToHkd.setScale(2, RoundingMode.HALF_EVEN));
-                currency.setPath("CAD => GPB => HKD");
-                currency.setCountry("HONG KONG");
-                response.add(currency);
-
-            }
-            case EUR -> {
-                log.info("Converting from {} to {}", currency.getFromCurrencyCode(), currency.getToCurrencyCode());
-                //using GPB as unitary currency for Best rate
-                //1CAD = 0.61GBP
-                BigDecimal cadToGbp = amount.multiply(BigDecimal.valueOf(GBP_RATE));
-                BigDecimal gbpToEur = cadToGbp.multiply(BigDecimal.valueOf(GBP_EUR_RATE));
-                currency.setConvertedAmount(gbpToEur.setScale(2, RoundingMode.HALF_EVEN));
-                currency.setPath("CAD => GPB => EUR");
-                currency.setCountry("Europe");
-                response.add(currency);
-            }
-            case BTC -> {
-                log.info("Converting from {} to {}", currency.getFromCurrencyCode(), currency.getToCurrencyCode());
-                //using USD as unitary currency for Best rate
-                //1CAD = 0.73USD
-                BigDecimal cadToUsd = amount.multiply(BigDecimal.valueOf(USD_RATE));
-                BigDecimal usdToBtc = cadToUsd.multiply(BigDecimal.valueOf(USD_BTC_RATE));
-                currency.setConvertedAmount(usdToBtc.setScale(2, RoundingMode.HALF_EVEN));
-                currency.setPath("CAD => USD => BTC");
-                currency.setCountry("BITCOIN");
-                response.add(currency);
-            }
-
-            case BRL -> {
-                log.info("Converting from {} to {}", currency.getFromCurrencyCode(), currency.getToCurrencyCode());
-                //using USD as unitary currency for Best rate
-                //1CAD = 0.73USD
-                BigDecimal cadToUsd = amount.multiply(BigDecimal.valueOf(USD_RATE));
-                BigDecimal usdToBrl = cadToUsd.multiply(BigDecimal.valueOf(USD_BRL_RATE));
-                currency.setConvertedAmount(usdToBrl.setScale(2, RoundingMode.HALF_EVEN));
-                currency.setCountry("BRAZIL");
-                currency.setPath("CAD => USD => BRL");
-                response.add(currency);
-            }
-            case USD -> {
-                log.info("Converting from {} to {}", currency.getFromCurrencyCode(), currency.getToCurrencyCode());
-                //using GPB as unitary currency for Best rate
-                //1CAD = 0.61GBP
-                BigDecimal cadToGpb = amount.multiply(BigDecimal.valueOf(GBP_RATE));
-                BigDecimal gpbToUsd = cadToGpb.multiply(BigDecimal.valueOf(GBP_USD_RATE));
-                currency.setConvertedAmount(gpbToUsd.setScale(2, RoundingMode.HALF_EVEN));
-                currency.setCountry("UNITED STATES OF AMERICA");
-                currency.setPath("CAD => GBP => USD");
-                response.add(currency);
-            }
-
-            default -> log.info("No match found");
-
-        }
-        return response;
-    }
 }
