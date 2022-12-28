@@ -1,7 +1,7 @@
 package com.richieoscar.currencyconverter.service.impl;
 
-import com.richieoscar.currencyconverter.exception.FileReportException;
 import com.richieoscar.currencyconverter.dto.CsvReportDto;
+import com.richieoscar.currencyconverter.exception.FileReportException;
 import com.richieoscar.currencyconverter.service.FileReportService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +33,7 @@ public class CSVReportService implements FileReportService<List<CsvReportDto>, H
             for (CsvReportDto csvReportDto : data) {
                 csvWriter.write(csvReportDto, classPropertyName);
             }
+
             csvWriter.close();
             log.info("Download Completed, CSV File Created");
         } catch (Exception e) {

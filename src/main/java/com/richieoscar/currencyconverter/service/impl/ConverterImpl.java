@@ -1,6 +1,6 @@
 package com.richieoscar.currencyconverter.service.impl;
 
-import com.richieoscar.currencyconverter.HttpService.ConverterHttpService;
+import com.richieoscar.currencyconverter.http.ConverterHttpService;
 import com.richieoscar.currencyconverter.dto.ConvertRequest;
 import com.richieoscar.currencyconverter.dto.ConverterResponse;
 import com.richieoscar.currencyconverter.dto.CsvReportDto;
@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
 
 import static java.util.stream.Collectors.toList;
@@ -51,7 +52,7 @@ public class ConverterImpl implements Converter {
         dataSet.put("currency", new ArrayList<>(Arrays.asList(currencies)));
 
         //DO THE CONVERSION
-        List<ConverterResponse> convertedCurrency = doConversion(dataSet, request.getAmount(), request);
+        List<ConverterResponse> convertedCurrency = doConversion(dataSet, request.getAmount());
         List<CsvReportDto> conversionFileList = convertedCurrency.stream().map(converterResponse -> CsvReportDto.builder().
                 amount(converterResponse.getConvertedAmount())
                 .currencyCode(converterResponse.getToCurrencyCode())
@@ -61,7 +62,7 @@ public class ConverterImpl implements Converter {
         fileReportService.exportCSV(conversionFileList, response);
     }
 
-    private List<ConverterResponse> doConversion(Map<String, ArrayList<ConverterResponse>> data, BigDecimal amount, ConvertRequest request) {
+    private List<ConverterResponse> doConversion(Map<String, ArrayList<ConverterResponse>> data, BigDecimal amount) {
         ArrayList<ConverterResponse> matchingPair = data.get("matchingPair");
         ArrayList<ConverterResponse> toCurrencyCodePair = data.get("toCurrencyCodePair");
         ArrayList<ConverterResponse> currency = data.get("currency");
@@ -98,7 +99,8 @@ public class ConverterImpl implements Converter {
                 log.info("Best rate pair {}", bestRatePair);
                 return toCurrencyCodePair.stream().filter(converterResponse -> converterResponse.getFromCurrencyCode().equals(bestRatePair.getToCurrencyCode()))
                         .map(converterResponse -> {
-                            converterResponse.setConvertedAmount(amount.multiply(BigDecimal.valueOf(Double.parseDouble(converterResponse.getExchangeRate()))));
+                            BigDecimal finalConvertedAmount = bestRatePair.getConvertedAmount().multiply(BigDecimal.valueOf(Double.parseDouble(converterResponse.getExchangeRate())));
+                            converterResponse.setConvertedAmount(finalConvertedAmount.setScale(2, RoundingMode.HALF_EVEN));
                             converterResponse.setPath(String.format("%s | %s | %s", bestRatePair.getFromCurrencyCode(), bestRatePair.getToCurrencyCode(), converterResponse.getToCurrencyCode()));
                             return getCountry(converterResponse);
                         }).collect(toList());
