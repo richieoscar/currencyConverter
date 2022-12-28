@@ -24,7 +24,7 @@ public class ConverterHttpService {
         log.info("Service Url {}", BASE_URL);
         try {
             response = restTemplate.getForEntity(BASE_URL, ConverterResponse[].class);
-            log.info("ApiResponse {}", response.getBody());
+            log.info("ApiResponse {}", response);
         } catch (Exception e) {
             log.error("Error Occurred while fetching Currencies");
             throw new CurrencyConverterException("Error Processing Request");

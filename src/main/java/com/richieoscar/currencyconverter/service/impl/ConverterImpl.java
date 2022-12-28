@@ -1,11 +1,11 @@
 package com.richieoscar.currencyconverter.service.impl;
 
-import com.richieoscar.currencyconverter.http.ConverterHttpService;
 import com.richieoscar.currencyconverter.dto.ConvertRequest;
 import com.richieoscar.currencyconverter.dto.ConverterResponse;
 import com.richieoscar.currencyconverter.dto.CsvReportDto;
 import com.richieoscar.currencyconverter.dto.DefaultApiResponse;
 import com.richieoscar.currencyconverter.exception.CurrencyConverterException;
+import com.richieoscar.currencyconverter.http.ConverterHttpService;
 import com.richieoscar.currencyconverter.service.Converter;
 import com.richieoscar.currencyconverter.service.FileReportService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static java.util.stream.Collectors.toList;
 
@@ -34,6 +35,7 @@ public class ConverterImpl implements Converter {
         //GET CURRENCY RATES FORM API
         Map<String, ArrayList<ConverterResponse>> dataSet = new HashMap<>();
         ConverterResponse[] currencies = converterHttpService.getCurrencies();
+        log.info("Currencies {}", Arrays.asList(currencies));
         if (currencies == null) {
             throw new CurrencyConverterException("Could not Fetch Conversion pair");
         }
@@ -86,24 +88,41 @@ public class ConverterImpl implements Converter {
                 }
             }
             if (cadSet.isEmpty()) throw new CurrencyConverterException("No Conversion Available");
-
             log.info("CadSet {}", cadSet);
-            Optional<ConverterResponse> maxValue = cadSet.stream().map(converterResponse -> {
+            /** FIRST PATH CONVERSION
+             * Process the Cad set and convert CAD to all available currency in the set
+             * e.g CAD to USD, CAD to EUR
+             * set all the converted amounts respectively in a new set
+             */
+
+            List<ConverterResponse> processedCadSet = cadSet.stream().map(converterResponse -> {
                 converterResponse.setConvertedAmount(amount.multiply(BigDecimal.valueOf(Double.parseDouble(converterResponse.getExchangeRate()))));
+                return converterResponse;
+            }).collect(Collectors.toList());
+            log.info("processed CadSet {}", processedCadSet);
+
+            //Map the converted amount in the processed cadSet for each convertedAmount in the toCurrencyCodePair
+            final int[] index = {0};
+            toCurrencyCodePair.forEach(converterResponse -> {
+                converterResponse.setConvertedAmount(processedCadSet.get(index[0]).getConvertedAmount());
+                index[0] += 1;
+            });
+            log.info("updated toCurrencyPair {}", toCurrencyCodePair);
+
+            //Do FINAL PATH  conversion and get the Max Converted Amount in to toCurrencyCode List
+            Optional<ConverterResponse> maxValue = toCurrencyCodePair.stream().map(converterResponse -> {
+                BigDecimal finalConvertedAmount = converterResponse.getConvertedAmount().multiply(BigDecimal.valueOf(Double.parseDouble(converterResponse.getExchangeRate())));
+                converterResponse.setConvertedAmount(finalConvertedAmount);
                 return converterResponse;
             }).max(Comparator.comparing(ConverterResponse::getConvertedAmount));
 
-            //Max is the highest value from conversion of CAD to Other currencies
             if (maxValue.isPresent()) {
-                ConverterResponse bestRatePair = maxValue.get();
-                log.info("Best rate pair {}", bestRatePair);
-                return toCurrencyCodePair.stream().filter(converterResponse -> converterResponse.getFromCurrencyCode().equals(bestRatePair.getToCurrencyCode()))
-                        .map(converterResponse -> {
-                            BigDecimal finalConvertedAmount = bestRatePair.getConvertedAmount().multiply(BigDecimal.valueOf(Double.parseDouble(converterResponse.getExchangeRate())));
-                            converterResponse.setConvertedAmount(finalConvertedAmount.setScale(2, RoundingMode.HALF_EVEN));
-                            converterResponse.setPath(String.format("%s | %s | %s", bestRatePair.getFromCurrencyCode(), bestRatePair.getToCurrencyCode(), converterResponse.getToCurrencyCode()));
-                            return getCountry(converterResponse);
-                        }).collect(toList());
+                ConverterResponse bestRate = maxValue.get();
+                log.info("Best Rate {}", bestRate);
+                bestRate.setPath(String.format("%s | %s | %s", "CAD", bestRate.getFromCurrencyCode(), bestRate.getToCurrencyCode()));
+                bestRate.setConvertedAmount(bestRate.getConvertedAmount().setScale(2, RoundingMode.HALF_EVEN));
+                getCountry(bestRate);
+                return List.of(bestRate);
             }
 
         } else return Collections.emptyList();
