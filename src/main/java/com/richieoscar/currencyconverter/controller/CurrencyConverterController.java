@@ -28,4 +28,10 @@ public class CurrencyConverterController {
         log.info("CurrencyConverterController::convert()");
         converter.convert(request, response);
     }
+    @PostMapping(value = "/convert")
+    public void convert2(@RequestBody ConvertRequest request, HttpServletResponse response) {
+        log.info("CurrencyConverterController::convert()");
+        converter.convert(request, response);
+    }
+
 }
